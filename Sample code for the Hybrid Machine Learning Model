@@ -1,0 +1,77 @@
+
+
+#Set the Working directory
+setwd("")
+
+#import the data with continuous outcome
+Initial.Data <- read.csv("Continuous_Data.csv")
+
+#Transform the continous outcome to a binary outcome
+Bin_Target <- ifelse(Initial.Data$Cont_Target == 0,0,1)
+
+Bin_Target
+Bin.Data <- cbind(Bin_Target, Initial.Data[2:ncol(Initial.Data)])
+
+#Implement the first step: Fit the model to predict 0-1 (Qualitative model)
+
+Bin.Train <- Bin.Data[1:400,] #Set according to data
+Bin.Test  <- Bin.Data[401:nrow(Bin.Data),] #Set according to data
+
+#Fit the qualitative model. Here we give example of randomForest in ranger package
+#For brevity in this example we do not include model tunning
+# The model can be tunned for best hyperparameters according to the algorithm in use based on the R package documentation
+library(ranger)
+Step1.Model <- ranger(Bin_Target ~., 
+                      classification = T, 
+                      num.trees = 500, 
+                      mtry = 3, 
+                      data = Bin.Train) 
+
+Step1.Predictions <- predict(Step1.Model, Bin.Test)
+Step1.Predicted.Data <- data.frame(Step1.Predictions$predictions, Bin.Test$Bin_Target)
+
+#Calculate the AUC
+library(pROC)
+Step1.ROC <- roc(as.vector(Step1.Predictions$predictions), Bin.Test$Bin_Target)
+Step1.AUC <- as.numeric(auc(Step1.ROC)) # AUC Value between 0 to 1
+
+#Implement the second step; Fit the model to predict the continuous values (Quantitative model)
+Cont.Train_ <- Initial.Data[1:400,] #Split Set according to data
+Cont.Test_ <- Initial.Data[401:nrow(Initial.Data),] #Split Set according to data
+
+library(dplyr)
+Cont.Train <- Cont.Train_%>% filter(Cont_Target > 0) #Filter only the non-zero values 
+
+
+#Fit the quantitative model. Here we give example of randomForest in ranger package
+#For brevity in this example we do not include model tunning
+# The model can be tunned for best hyperparameters according to the algorithm in use based on the R package documentation
+
+Step2.Model <- ranger(Cont_Target~.,
+                      num.trees = 300, 
+                      mtry = 3, 
+                      data = Cont.Train) #make sure not to use Cont.Train_ as it still has zero values
+
+#Get those observations from the test set that were predicted as 1 and join with the original continuous values 
+Cont.Test <- cbind(Cont.Test_,
+                   data.frame(Step1.Predictions = Step1.Predicted.Data$Step1.Predictions.predictions))
+Cont.Test <- Cont.Test %>% filter(Step1.Predictions == 1)
+Cont.Test <- Cont.Test[, -ncol(Cont.Test)]
+
+Step2.Predictions <- predict(Step2.Model, Cont.Test)
+Step2.Predicted.Data <- data.frame(Step2.Predictions$predictions, Cont.Test$Cont_Target)
+
+#Calculate the R^2
+Step2.R2 <- cor(Step2.Predicted.Data$Step2.Predictions.predictions, Step2.Predicted.Data$Cont.Test.Cont_Target)^2
+
+#Calculate the Hybrid Accuracy Index (HAI)
+Number.zeros <- Bin.Data %>% count(Bin.Data$Bin_Target == 0)
+Percentage.zeros <- Number.zeros[2,2]/nrow(Bin.Data)
+
+Number.non_zeros <- Initial.Data %>% count(Initial.Data$Cont_Target > 0)
+Percentage.non_zeros <- Number.non_zeros[2,2]/nrow(Initial.Data)
+
+HAI <- (Step1.AUC*Percentage.zeros) + (Step2.R2*Percentage.non_zeros)
+HAI
+
+nrow
